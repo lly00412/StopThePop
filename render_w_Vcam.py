@@ -11,6 +11,7 @@
 
 import torch
 from scene import Scene
+from scene.cameras import VirtualCam
 import os
 from tqdm import tqdm
 from os import makedirs
@@ -33,7 +34,11 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=render_depth)["render"]
-        breakpoint()
+        depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=render_depth)["render"]
+        look_at = depth
+        GetVcam = VirtualCam(view)
+        for drt in ['u','d','l','r']:
+            v_view = GetVcam.get_near_cam_by_look_at()
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
