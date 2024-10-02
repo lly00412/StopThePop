@@ -12,7 +12,7 @@
 import torch
 from torch import nn
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getView2World
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
@@ -81,12 +81,14 @@ class VirtualCam(nn.Module):
         self.get_camera_direction_and_center()
 
     def get_camera_direction_and_center(self):
-        self.camera_center = self.gt_cam.camera_center.clone()  # torch.tensor
-        w2c = self.gt_cam.world_view_transform.T
-        c2w = torch.linalg.inv(w2c)
-        self.left = c2w[:3, 0].clone()
-        self.up = c2w[:3, 1].clone()
-        self.forward = c2w[:3, 2].clone()
+        # self.camera_center = self.gt_cam.camera_center.clone()  # torch.tensor
+        # w2c = self.gt_cam.world_view_transform.T
+        # c2w = torch.linalg.inv(w2c)
+        c2w = torch.tensor(getView2World(self.gt_cam.R, self.gt_cam.T))
+        self.camera_center = c2w[:3,3].clone().to(self.data_device)
+        self.left = c2w[:3, 0].clone().to(self.data_device)
+        self.up = c2w[:3, 1].clone().to(self.data_device)
+        self.forward = c2w[:3, 2].clone().to(self.data_device)
 
     def get_rotation_matrix(self, theta=5, axis='x'):  # rot theta degree across x axis
         phi = (theta * (np.pi / 180.))
@@ -136,22 +138,17 @@ class VirtualCam(nn.Module):
         return trans
 
     def get_near_cam_by_look_at(self, look_at, theta=3, direction='u'):
+        breakpoint()
         trans = self.get_translation_matrix(self.camera_center, look_at)
         rot = self.get_rotation_by_direction(theta, direction)
 
-        c2w_homo = torch.eye(4).to(self.data_device)
-        c2w_homo[:3] = self.gt_cam.world_view_transform.inverse()[:3].clone()
-        w2c = torch.inverse(c2w_homo)
+        # c2w_homo = torch.eye(4).to(self.data_device)
+        # c2w_homo[:3] = self.gt_cam.world_view_transform.inverse()[:3].clone()
+        w2c = self.gt_cam.world_view_transform.T.clone()
+        breakpoint()
         w2c = torch.inverse(trans) @ rot @ trans @ w2c
-        new_c2w = torch.inverse(w2c)
-
-        new_R = new_c2w[:3, :3].t().cpu().numpy()
-        new_T = new_c2w[:3, 3].cpu().numpy()
-
-        world_view_transform = torch.tensor(
-            getWorld2View2(new_R, new_T, self.gt_cam.trans, self.gt_cam.scale)).transpose(0, 1).to(self.data_device)
-        projection_matrix = getProjectionMatrix(znear=self.gt_cam.znear, zfar=self.gt_cam.zfar, fovX=self.gt_cam.FoVx,
-                                                fovY=self.gt_cam.FoVy).transpose(0, 1).to(self.data_device)
+        world_view_transform = w2c.transpose(0, 1).to(self.data_device)
+        projection_matrix = self.gt_cam.projection_matrix
         full_proj_transform = (
             world_view_transform.unsqueeze(0).bmm(projection_matrix.unsqueeze(0))).squeeze(0)
         VirtualCam = MiniCam(width=self.gt_cam.image_width, height=self.gt_cam.image_height,

@@ -25,7 +25,7 @@ from arguments import ModelParams, PipelineParams, SplattingSettings
 from diff_gaussian_rasterization import ExtendedSettings
 from gaussian_renderer import GaussianModel
 from utils.proj_utils import *
-from utils.graphics_utils import getIntrinsicMatrix
+from utils.graphics_utils import getIntrinsicMatrix,getView2World
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, splat_args: ExtendedSettings, render_depth: bool):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders" if not render_depth else "depth")
@@ -37,18 +37,23 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=False)["render"]
         depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"]
+
+        # compute look at scene center
         K = getIntrinsicMatrix(width=view.image_width, height=view.image_height, fovX=view.FoVx, fovY=view.FoVy).to(
             depth)
         inv_K = torch.inverse(K).unsqueeze(0)
-        valid_depth = depth[0][depth[0]<depth[0].max()]
-        breakpoint()
         backproj_func = Backprojection(height=view.image_height,width=view.image_width)
         depth_v = depth[0].clone()
-        depth_v[depth_v==depth_v.max()] = 0.
         depth_v = depth_v.unsqueeze(0).unsqueeze(0)
-        breakpoint()
-        point3d = backproj_func(depth_v.cpu(),inv_K.cpu(),img_like_out=True)
-        look_at = valid_depth.median()
+        mask = (depth_v < depth_v.max()).squeeze(0)
+        point3d_camera = backproj_func(depth_v.cpu(),inv_K.cpu(),img_like_out=True).squeeze(0)
+        C2W = torch.tensor(getView2World(view.R,view.T))
+        point3d_world = C2W @ point3d_camera.view(4,-1)
+        point3d_world = point3d_world.view(4,point3d_camera.shape[1],point3d_camera.shape[2])
+        expanded_mask = mask.expand_as(point3d_world)
+        selected = point3d_world.to(mask.device)[expanded_mask]
+        selected = selected.view(4, -1)
+        look_at = selected.median(1).values[:3]
         GetVcam = VirtualCam(view)
         for drt in ['u','d','l','r']:
             v_view = GetVcam.get_near_cam_by_look_at(look_at=look_at,direction=drt)
