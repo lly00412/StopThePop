@@ -25,41 +25,54 @@ from arguments import ModelParams, PipelineParams, SplattingSettings
 from diff_gaussian_rasterization import ExtendedSettings
 from gaussian_renderer import GaussianModel
 from utils.proj_utils import *
-from utils.graphics_utils import getIntrinsicMatrix,getView2World
+from utils.graphics_utils import getIntrinsicMatrix
+from utils.plot_utils import colormap
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, splat_args: ExtendedSettings, render_depth: bool):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders" if not render_depth else "depth")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
+    uncert_path = os.path.join(model_path, name, "ours_{}".format(iteration), "uncert")
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
+    makedirs(uncert_path, exist_ok=True)
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=False)["render"]
-        depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"]
-
-        # compute look at scene center
-        K = getIntrinsicMatrix(width=view.image_width, height=view.image_height, fovX=view.FoVx, fovY=view.FoVy).to(
-            depth)
-        inv_K = torch.inverse(K).unsqueeze(0)
-        backproj_func = Backprojection(height=view.image_height,width=view.image_width)
-        depth_v = depth[0].clone()
-        depth_v = depth_v.unsqueeze(0).unsqueeze(0)
-        mask = (depth_v < depth_v.max()).squeeze(0)
-        point3d_camera = backproj_func(depth_v.cpu(),inv_K.cpu(),img_like_out=True).squeeze(0)
-        C2W = torch.tensor(getView2World(view.R,view.T))
-        point3d_world = C2W @ point3d_camera.view(4,-1)
-        point3d_world = point3d_world.view(4,point3d_camera.shape[1],point3d_camera.shape[2])
-        expanded_mask = mask.expand_as(point3d_world)
-        selected = point3d_world.to(mask.device)[expanded_mask]
-        selected = selected.view(4, -1)
-        look_at = selected.median(1).values[:3]
+        depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"][0]
+        look_at, rd_c2w = extract_scene_center_and_C2W(depth, view)
+        rd_c2w = rd_c2w.to(depth.device)
+        K = getIntrinsicMatrix(width=view.image_width, height=view.image_height,
+                               fovX=view.FoVx, fovY=view.FoVy).to(depth.device) # (4,4)
         GetVcam = VirtualCam(view)
+        backwarp = BackwardWarping(out_hw=(view.image_height,view.image_width),
+                                   device=depth.device,K= K)
+        rd_depth = depth.clone().unsqueeze(0).unsqueeze(0)
+        vir_depths = []
+        rd2virs = []
         for drt in ['u','d','l','r']:
-            v_view = GetVcam.get_near_cam_by_look_at(look_at=look_at,direction=drt)
-            breakpoint()
-            v_depth = render(v_view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"]
-            torchvision.utils.save_image(v_depth[0], os.path.join(render_path, '{0:05d}'.format(idx) + drt +".png"))
+            vir_view = GetVcam.get_near_cam_by_look_at(look_at=look_at,direction=drt)
+            vir_depth = render(vir_view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)[
+                "render"][0]
+            torchvision.utils.save_image(vir_depth, os.path.join(render_path, '{0:05d}'.format(idx) + drt + ".png"))
+            vir_w2c = vir_view.world_view_transform.transpose(0,1)
+            rd2vir = vir_w2c @ rd_c2w
+            rd2virs.append(rd2vir)
+            vir_depths.append(vir_depth.unsqueeze(0))
+        rd_depths = rd_depth.repeat(4,1,1,1)
+        vir_depths = torch.stack(vir_depths)
+        rd2virs = torch.stack(rd2virs)
+        _, vir2rd_depths, nv_mask = backwarp(img_src=vir_depths,depth_src=vir_depths,depth_tgt=rd_depths,tgt2src_transform=rd2virs)
+        vir2rd_depth_sum = vir2rd_depths.sum(0)
+        numels = 4 - nv_mask.sum(0) + 1e-6
+        warp_depth = vir2rd_depth_sum / numels
+        uncert = (rd_depth.squeeze(0) - warp_depth)**2
+        mask = (rd_depth.squeeze(0)<1.)
+        uncert[~mask] = 0.
+        uncert_color = colormap(uncert,max=1,min=0)
+        torchvision.utils.save_image(uncert_color, os.path.join(uncert_path, '{0:05d}'.format(idx) + ".png"))
+            # vir2rd_depth = vir2rd_depth.squeeze(0).squeeze(0)
+            # torchvision.utils.save_image(vir2rd_depth, os.path.join(render_path, '{0:05d}'.format(idx) + drt + "warp.png"))
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
@@ -84,6 +97,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
             json.dump(obj={
                 "num_gaussians": num_gaussians,
             }, fp=fp, indent=2)
+
 
 if __name__ == "__main__":
     # Set up command line argument parser

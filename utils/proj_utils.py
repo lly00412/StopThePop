@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
+from utils.graphics_utils import getIntrinsicMatrix,getView2World
+
 class Projection(nn.Module):
     """Layer which projects 3D points into a camera view
     """
@@ -139,13 +141,13 @@ class BackwardWarping(nn.Module):
                 img_src: torch.Tensor,
                 depth_src: torch.Tensor,
                 depth_tgt: torch.Tensor,
-                src2tgt_transform: torch.Tensor,
+                tgt2src_transform: torch.Tensor,
                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        b, h, w = depth_tgt.shape
+        b, _, h, w = depth_tgt.shape
 
         # reproject
         pts3d_tgt = self.backproj(depth_tgt,self.inv_K)
-        pts3d_src = self.transform3d(pts3d_tgt,src2tgt_transform)
+        pts3d_src = self.transform3d(pts3d_tgt,tgt2src_transform)
         src_grid = self.projection(pts3d_src,self.K,normalized=True)
         transformed_distance = pts3d_src[:, 2:3].view(b,1,h,w)
 
@@ -157,9 +159,29 @@ class BackwardWarping(nn.Module):
 
         # rm invalid coords
         vaild_coord_mask = (src_grid[...,0]> -1) & (src_grid[...,0] < 1) & (src_grid[...,1]> -1) & (src_grid[...,1] < 1)
-        vaild_coord_mask.unsqueeze(1)
+        vaild_coord_mask = vaild_coord_mask.unsqueeze(1)
 
         valid_mask = valid_depth_mask & vaild_coord_mask
         invaild_mask = ~valid_mask
 
         return img_tgt.float(), depth_src2tgt.float(), invaild_mask.float()
+
+def extract_scene_center_and_C2W(depth, view):
+    K = getIntrinsicMatrix(width=view.image_width, height=view.image_height, fovX=view.FoVx, fovY=view.FoVy).to(
+        depth)
+    inv_K = torch.inverse(K).unsqueeze(0)
+    backproj_func = Backprojection(height=view.image_height, width=view.image_width)
+    depth_v = depth.clone()
+    depth_v = depth_v.unsqueeze(0).unsqueeze(0)
+    mask = (depth_v < depth_v.max()).squeeze(0)
+    point3d_camera = backproj_func(depth_v.cpu(), inv_K.cpu(), img_like_out=True).squeeze(0)
+    # C2W = torch.tensor(getView2World(view.R, view.T))
+    C2W = view.world_view_transform.transpose(0,1).inverse().cpu()
+    point3d_world = C2W @ point3d_camera.view(4, -1)
+    point3d_world = point3d_world.view(4, point3d_camera.shape[1], point3d_camera.shape[2])
+    expanded_mask = mask.expand_as(point3d_world)
+    selected = point3d_world.to(mask.device)[expanded_mask]
+    selected = selected.view(4, -1)
+    look_at = selected.median(1).values[:3]
+    # look_at = selected.mean(1)[:3]
+    return look_at,C2W

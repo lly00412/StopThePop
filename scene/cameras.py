@@ -138,14 +138,12 @@ class VirtualCam(nn.Module):
         return trans
 
     def get_near_cam_by_look_at(self, look_at, theta=3, direction='u'):
-        breakpoint()
         trans = self.get_translation_matrix(self.camera_center, look_at)
         rot = self.get_rotation_by_direction(theta, direction)
 
         # c2w_homo = torch.eye(4).to(self.data_device)
         # c2w_homo[:3] = self.gt_cam.world_view_transform.inverse()[:3].clone()
         w2c = self.gt_cam.world_view_transform.T.clone()
-        breakpoint()
         w2c = torch.inverse(trans) @ rot @ trans @ w2c
         world_view_transform = w2c.transpose(0, 1).to(self.data_device)
         projection_matrix = self.gt_cam.projection_matrix
