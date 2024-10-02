@@ -24,6 +24,8 @@ from arguments import ModelParams, PipelineParams, get_combined_args
 from arguments import ModelParams, PipelineParams, SplattingSettings
 from diff_gaussian_rasterization import ExtendedSettings
 from gaussian_renderer import GaussianModel
+from utils.proj_utils import *
+from utils.graphics_utils import getIntrinsicMatrix
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, splat_args: ExtendedSettings, render_depth: bool):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders" if not render_depth else "depth")
@@ -33,12 +35,26 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     makedirs(gts_path, exist_ok=True)
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=render_depth)["render"]
-        depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=render_depth)["render"]
-        look_at = depth
+        rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=False)["render"]
+        depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"]
+        K = getIntrinsicMatrix(width=view.image_width, height=view.image_height, fovX=view.FoVx, fovY=view.FoVy).to(
+            depth)
+        inv_K = torch.inverse(K).unsqueeze(0)
+        valid_depth = depth[0][depth[0]<depth[0].max()]
+        breakpoint()
+        backproj_func = Backprojection(height=view.image_height,width=view.image_width)
+        depth_v = depth[0].clone()
+        depth_v[depth_v==depth_v.max()] = 0.
+        depth_v = depth_v.unsqueeze(0).unsqueeze(0)
+        breakpoint()
+        point3d = backproj_func(depth_v.cpu(),inv_K.cpu(),img_like_out=True)
+        look_at = valid_depth.median()
         GetVcam = VirtualCam(view)
         for drt in ['u','d','l','r']:
-            v_view = GetVcam.get_near_cam_by_look_at()
+            v_view = GetVcam.get_near_cam_by_look_at(look_at=look_at,direction=drt)
+            breakpoint()
+            v_depth = render(v_view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"]
+            torchvision.utils.save_image(v_depth[0], os.path.join(render_path, '{0:05d}'.format(idx) + drt +".png"))
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))

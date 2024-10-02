@@ -72,7 +72,7 @@ class MiniCam:
         self.full_proj_transform_inverse = torch.inverse(self.full_proj_transform)
 
 
-class VirtualCam:
+class VirtualCam(nn.Module):
     def __init__(self, gt_cam, data_device="cuda"
                  ):
         super(VirtualCam, self).__init__()
@@ -145,8 +145,8 @@ class VirtualCam:
         w2c = torch.inverse(trans) @ rot @ trans @ w2c
         new_c2w = torch.inverse(w2c)
 
-        new_R = new_c2w[:3, :3].transpose()
-        new_T = new_c2w[:3, 3]
+        new_R = new_c2w[:3, :3].t().cpu().numpy()
+        new_T = new_c2w[:3, 3].cpu().numpy()
 
         world_view_transform = torch.tensor(
             getWorld2View2(new_R, new_T, self.gt_cam.trans, self.gt_cam.scale)).transpose(0, 1).to(self.data_device)

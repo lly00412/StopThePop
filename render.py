@@ -33,7 +33,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=render_depth)["render"]
-        breakpoint()
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
@@ -44,6 +43,7 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False, skip_test=args.skip_test, skip_train=args.skip_train)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
+        bg_color = [0, 0, 0] if render_depth else bg_color
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:

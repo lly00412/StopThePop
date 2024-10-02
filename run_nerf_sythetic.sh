@@ -4,7 +4,7 @@ export CUDA_VISIBLE_DEVICES=0
 export DATA_DIR=/mnt/Data2/nerf_datasets/nerf_synthetic/
 
 #python train.py -s $DATA_DIR/drums -m output/nerf_synthetic/drums-debug
-python render.py -m output/nerf_synthetic/ship2
+python render_w_Vcam.py -m output/nerf_synthetic/ship2 --render_depth
 
 # To view the results：
 # 2D-GS-Viser-Viewer
