@@ -29,17 +29,48 @@ from utils.graphics_utils import getIntrinsicMatrix
 from utils.plot_utils import colormap
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background, splat_args: ExtendedSettings, render_depth: bool):
-    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders" if not render_depth else "depth")
+    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
+    depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "depth")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
-    uncert_path = os.path.join(model_path, name, "ours_{}".format(iteration), "uncert")
+    uncert_depth_path = os.path.join(model_path, name, "ours_{}".format(iteration), "uncert_depth")
+    uncert_rgb_path = os.path.join(model_path, name, "ours_{}".format(iteration), "uncert_rgb")
+    err_path = os.path.join(model_path, name, "ours_{}".format(iteration), "error")
+    mask_path = os.path.join(model_path, name, "ours_{}".format(iteration), "common_mask")
 
     makedirs(render_path, exist_ok=True)
+    makedirs(depth_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
-    makedirs(uncert_path, exist_ok=True)
+    makedirs(uncert_depth_path, exist_ok=True)
+    makedirs(uncert_rgb_path, exist_ok=True)
+    makedirs(err_path, exist_ok=True)
+    makedirs(mask_path, exist_ok=True)
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+        ###########################
+        #  rendering RGB & error
+        ###########################
         rendering = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=False)["render"]
+        gt = view.original_image[0:3, :, :]
+        err = torch.mean((rendering - gt)**2,0)
+        maxtile = torch.quantile(err.flatten(),0.9)
+        topk_err = (err>maxtile)
+        err_color = colormap(err,max=maxtile,min=0.)
+        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(err_color, os.path.join(err_path, '{0:05d}'.format(idx) + ".png"))
+
+        ###########################
+        #  rendering depth
+        ###########################
         depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"][0]
+        torchvision.utils.save_image(depth, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
+
+        ###########################
+        #  rendering uncertainty
+        ###########################
+        vir_path = os.path.join(model_path, name, "ours_{}".format(iteration), "vir")
+        makedirs(vir_path, exist_ok=True)
+
         look_at, rd_c2w = extract_scene_center_and_C2W(depth, view)
         rd_c2w = rd_c2w.to(depth.device)
         K = getIntrinsicMatrix(width=view.image_width, height=view.image_height,
@@ -49,32 +80,68 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                                    device=depth.device,K= K)
         rd_depth = depth.clone().unsqueeze(0).unsqueeze(0)
         vir_depths = []
+        vir_renders = []
         rd2virs = []
         for drt in ['u','d','l','r']:
             vir_view = GetVcam.get_near_cam_by_look_at(look_at=look_at,direction=drt)
+            vir_render = render(vir_view, gaussians, pipeline, background, splat_args=splat_args, render_depth=False)[
+                "render"]
             vir_depth = render(vir_view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)[
                 "render"][0]
-            torchvision.utils.save_image(vir_depth, os.path.join(render_path, '{0:05d}'.format(idx) + drt + ".png"))
+            torchvision.utils.save_image(vir_depth, os.path.join(vir_path, '{0:05d}'.format(idx) + drt + ".png"))
             vir_w2c = vir_view.world_view_transform.transpose(0,1)
             rd2vir = vir_w2c @ rd_c2w
             rd2virs.append(rd2vir)
             vir_depths.append(vir_depth.unsqueeze(0))
+            vir_renders.append(vir_render)
         rd_depths = rd_depth.repeat(4,1,1,1)
+        rd_renders = rendering.unsqueeze(0).repeat(4,1,1,1)
         vir_depths = torch.stack(vir_depths)
         rd2virs = torch.stack(rd2virs)
-        _, vir2rd_depths, nv_mask = backwarp(img_src=vir_depths,depth_src=vir_depths,depth_tgt=rd_depths,tgt2src_transform=rd2virs)
+        vir2rd_renders, vir2rd_depths, nv_mask = backwarp(img_src=rd_renders,depth_src=vir_depths,depth_tgt=rd_depths,tgt2src_transform=rd2virs)
+
+        # depth uncertainty
         vir2rd_depth_sum = vir2rd_depths.sum(0)
-        # numels = 4. - nv_mask.sum(0)
-        uncert = (4. * rd_depth.squeeze(0) - vir2rd_depth_sum)**2
-        mask = (rd_depth.squeeze(0)<1.)
-        uncert[~mask] = 0.
-        uncert_color = colormap(uncert,max=16.,min=0.)
-        torchvision.utils.save_image(uncert_color, os.path.join(uncert_path, '{0:05d}'.format(idx) + ".png"))
-            # vir2rd_depth = vir2rd_depth.squeeze(0).squeeze(0)
-            # torchvision.utils.save_image(vir2rd_depth, os.path.join(render_path, '{0:05d}'.format(idx) + drt + "warp.png"))
-        gt = view.original_image[0:3, :, :]
-        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+        numels = 4. - nv_mask.sum(0)
+        vir2rd_depth = torch.zeros_like(rd_depth.squeeze(0))
+        vir2rd_depth[numels>0] = vir2rd_depth_sum[numels>0] / numels[numels>0]
+        uncert_depth = (rd_depth.squeeze(0) - vir2rd_depth_sum)**2
+        bg_mask = (rd_depth.squeeze(0)<1.) # only for nerf synthetic that does not have backgroud
+        mask = (rd_depth.squeeze(0)>0.) & bg_mask
+        uncert_depth[~mask] = 0.
+        depthtile = torch.quantile(uncert_depth.flatten(),0.9)
+        topk_depth = (uncert_depth>depthtile)
+        uncert_depth_color = colormap(uncert_depth,max=depthtile,min=0.)
+        torchvision.utils.save_image(uncert_depth_color, os.path.join(uncert_depth_path, '{0:05d}'.format(idx) + ".png"))
+
+        # rgb uncertainty
+        vir2rd_render_sum = vir2rd_renders.sum(0).mean(0,keepdim=True)
+        rendering_ = rendering.mean(0,keepdim=True)
+        vir2rd_render = torch.zeros_like(rendering_)
+        vir2rd_render[numels > 0] = vir2rd_render_sum[numels > 0] / numels[numels > 0]
+        uncert_rgb = (rendering_ - vir2rd_render) ** 2
+        uncert_rgb[~mask] = 0.
+        rendermax = torch.quantile(uncert_rgb.flatten(),0.9)
+        topk_rgb = (uncert_rgb>rendermax)
+        uncert_rgb_color = colormap(uncert_rgb,max=rendermax,min=0.)
+        torchvision.utils.save_image(uncert_rgb_color,
+                                     os.path.join(uncert_rgb_path, '{0:05d}'.format(idx) + ".png"))
+
+        ###############################
+        # comparing topk
+        ###############################
+        err_depth = (topk_err & topk_depth).float()
+        err_rgb = (topk_err & topk_rgb).float()
+        depth_rgb = (topk_depth | topk_rgb).float()
+        torchvision.utils.save_image(topk_err.float(),
+                                     os.path.join(mask_path, '{0:05d}'.format(idx) + "topk_err" + ".png"))
+        torchvision.utils.save_image(err_depth,
+                                     os.path.join(mask_path, '{0:05d}'.format(idx) + "err&depth" + ".png"))
+        torchvision.utils.save_image(err_rgb,
+                                     os.path.join(mask_path, '{0:05d}'.format(idx) + "err&rgb" + ".png"))
+        torchvision.utils.save_image(depth_rgb,
+                                     os.path.join(mask_path, '{0:05d}'.format(idx) + "depth+rgb" + ".png"))
+
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, splat_args: ExtendedSettings, render_depth: bool):
     with torch.no_grad():
