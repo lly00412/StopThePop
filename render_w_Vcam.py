@@ -64,12 +64,11 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         rd2virs = torch.stack(rd2virs)
         _, vir2rd_depths, nv_mask = backwarp(img_src=vir_depths,depth_src=vir_depths,depth_tgt=rd_depths,tgt2src_transform=rd2virs)
         vir2rd_depth_sum = vir2rd_depths.sum(0)
-        numels = 4 - nv_mask.sum(0) + 1e-6
-        warp_depth = vir2rd_depth_sum / numels
-        uncert = (rd_depth.squeeze(0) - warp_depth)**2
+        # numels = 4. - nv_mask.sum(0)
+        uncert = (4. * rd_depth.squeeze(0) - vir2rd_depth_sum)**2
         mask = (rd_depth.squeeze(0)<1.)
         uncert[~mask] = 0.
-        uncert_color = colormap(uncert,max=1,min=0)
+        uncert_color = colormap(uncert,max=16.,min=0.)
         torchvision.utils.save_image(uncert_color, os.path.join(uncert_path, '{0:05d}'.format(idx) + ".png"))
             # vir2rd_depth = vir2rd_depth.squeeze(0).squeeze(0)
             # torchvision.utils.save_image(vir2rd_depth, os.path.join(render_path, '{0:05d}'.format(idx) + drt + "warp.png"))
