@@ -106,8 +106,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         vir2rd_depth = torch.zeros_like(rd_depth.squeeze(0))
         vir2rd_depth[numels>0] = vir2rd_depth_sum[numels>0] / numels[numels>0]
         uncert_depth = (rd_depth.squeeze(0) - vir2rd_depth_sum)**2
-        bg_mask = (rd_depth.squeeze(0)<1.) # only for nerf synthetic that does not have backgroud
-        mask = (rd_depth.squeeze(0)>0.) & bg_mask
+        # bg_mask = (rd_depth.squeeze(0)<1.) # only for nerf synthetic that does not have backgroud
+        # mask = (rd_depth.squeeze(0)>0.) & bg_mask
+        mask = (rd_depth.squeeze(0) > 0.)
         uncert_depth[~mask] = 0.
         depthtile = torch.quantile(uncert_depth.flatten(),0.9)
         topk_depth = (uncert_depth>depthtile)
