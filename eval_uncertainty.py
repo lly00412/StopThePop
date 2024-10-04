@@ -100,37 +100,40 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         rd2virs = torch.stack(rd2virs)
         vir2rd_renders, vir2rd_depths, nv_mask = backwarp(img_src=rd_renders,depth_src=vir_depths,depth_tgt=rd_depths,tgt2src_transform=rd2virs)
 
-        depths = torch.cat([vir2rd_depths,rd_depth])
-        depth_uncert = depths.var(0)
         # depth uncertainty
-        # numels = 4. - nv_mask.sum(0)
+        vir2rd_depth_sum = vir2rd_depths.sum(0)
+        numels = 4. - nv_mask.sum(0)
+        vir2rd_depth = torch.zeros_like(rd_depth.squeeze(0))
+        vir2rd_depth[numels>0] = vir2rd_depth_sum[numels>0] / numels[numels>0]
+        uncert_depth = (rd_depth.squeeze(0) - vir2rd_depth_sum)**2
         # bg_mask = (rd_depth.squeeze(0)<1.) # only for nerf synthetic that does not have backgroud
         # mask = (rd_depth.squeeze(0)>0.) & bg_mask
         mask = (rd_depth.squeeze(0) > 0.)
-        depth_uncert[~mask] = 0.
-        depthtile = torch.quantile(depth_uncert.flatten(),0.9)
-        topk_depth = (depth_uncert>depthtile)
-        uncert_depth_color = colormap(depth_uncert,max=depthtile,min=0.)
+        uncert_depth[~mask] = 0.
+        depthtile = torch.quantile(uncert_depth.flatten(),0.9)
+        topk_depth = (uncert_depth>depthtile)
+        uncert_depth_color = colormap(uncert_depth,max=depthtile,min=0.)
         torchvision.utils.save_image(uncert_depth_color, os.path.join(uncert_depth_path, '{0:05d}'.format(idx) + ".png"))
 
         # rgb uncertainty
-        renderings = torch.cat([vir2rd_renders,rendering.unsqueeze(0)])
-        render_uncert = renderings.var(0).mean(0,keepdim=True)
-        render_uncert[~mask] = 0.
-        rendermax = torch.quantile(render_uncert.flatten(),0.9)
-        topk_rgb = (render_uncert>rendermax)
-        uncert_rgb_color = colormap(render_uncert,max=rendermax,min=0.)
+        vir2rd_render_sum = vir2rd_renders.sum(0).mean(0,keepdim=True)
+        rendering_ = rendering.mean(0,keepdim=True)
+        vir2rd_render = torch.zeros_like(rendering_)
+        vir2rd_render[numels > 0] = vir2rd_render_sum[numels > 0] / numels[numels > 0]
+        uncert_rgb = (rendering_ - vir2rd_render) ** 2
+        uncert_rgb[~mask] = 0.
+        rendermax = torch.quantile(uncert_rgb.flatten(),0.9)
+        topk_rgb = (uncert_rgb>rendermax)
+        uncert_rgb_color = colormap(uncert_rgb,max=rendermax,min=0.)
         torchvision.utils.save_image(uncert_rgb_color,
                                      os.path.join(uncert_rgb_path, '{0:05d}'.format(idx) + ".png"))
 
         ###############################
         # comparing topk
         ###############################
-        common_pts = (nv_mask.sum(0)<1.)
         err_depth = (topk_err & topk_depth).float()
         err_rgb = (topk_err & topk_rgb).float()
         depth_rgb = (topk_depth | topk_rgb).float()
-        vis_topk = ((topk_depth | topk_rgb) & common_pts).float()
         torchvision.utils.save_image(topk_err.float(),
                                      os.path.join(mask_path, '{0:05d}'.format(idx) + "topk_err" + ".png"))
         torchvision.utils.save_image(err_depth,
@@ -139,8 +142,6 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
                                      os.path.join(mask_path, '{0:05d}'.format(idx) + "err&rgb" + ".png"))
         torchvision.utils.save_image(depth_rgb,
                                      os.path.join(mask_path, '{0:05d}'.format(idx) + "depth+rgb" + ".png"))
-        torchvision.utils.save_image(vis_topk,
-                                     os.path.join(mask_path, '{0:05d}'.format(idx) + "vis_topk" + ".png"))
 
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, splat_args: ExtendedSettings, render_depth: bool):

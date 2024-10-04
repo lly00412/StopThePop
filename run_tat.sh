@@ -4,7 +4,7 @@ export CUDA_VISIBLE_DEVICES=0
 export DATA_DIR=/mnt/Data2/nerf_datasets/tandt_db/tandt/
 
 #python train.py -s $DATA_DIR/train --splatting_config configs/hierarchical.json -m output/tant/train --eval
-python render_w_Vcam.py -m output/tant/train --render_depth
+python render_w_Vcam_v2.py -m output/tant/train --render_depth
 #python render_w_Vcam.py -m output/nerf_synthetic/ship2 --render_depth
 
 # To view the results：
