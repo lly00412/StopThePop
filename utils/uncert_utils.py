@@ -30,3 +30,9 @@ def plot_roc(ROC_dict,fig_name, opt_label='rgb_err',intervals = 10):
     fig.set_size_inches(12, 8)
     fig.savefig(fig_name)
     plt.close()
+
+def write_auc(AUC_dict,txt_name):
+    with open(txt_name,'a') as f:
+        for val in AUC_dict.keys():
+            f.write(f'{val}: {AUC_dict[val]} \n')
+        f.close()
