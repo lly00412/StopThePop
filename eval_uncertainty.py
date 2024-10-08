@@ -33,6 +33,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     plot_path = os.path.join(model_path, name, "ours_{}".format(iteration), "roc")
     makedirs(plot_path, exist_ok=True)
 
+    ROCs = {}
+    AUCs = {}
+
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         ################################
         #  rendering RGB & error & depth
@@ -41,8 +44,9 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         depth = render(view, gaussians, pipeline, background, splat_args=splat_args, render_depth=True)["render"][0]
         gt = view.original_image[0:3, :, :]
         err = torch.mean((rendering - gt)**2,0)
-        bg_mask = (depth < 1.)  # only for nerf synthetic that does not have backgroud
-        mask = (depth > 0.) & bg_mask # (H,W)
+        # bg_mask = (depth < 1.)  # only for nerf synthetic that does not have backgroud
+        # mask = (depth > 0.) & bg_mask # (H,W)
+        mask = (depth > 0.)
 
         values = {}
         values['error'] = err[mask].flatten()
@@ -120,18 +124,34 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
         ################################
         #  compute roc and auc
         ################################
-        ROCs = {}
-        AUCs = {}
         opt_label = 'error'
+        rocs = {}
+        aucs = {}
         for val in values.keys():
             roc,auc = compute_roc(opt=values[opt_label],est=values[val], intervals=10)
-            ROCs[val] = roc.cpu().numpy()
-            AUCs[val] = auc
+            rocs[val] = np.array(roc)
+            aucs[val] = auc
+            if val not in ROCs.keys():
+                ROCs[val] = [roc]
+                AUCs[val] = [auc]
+            else:
+                ROCs[val].append(roc)
+                AUCs[val].append(auc)
 
         plot_file = os.path.join(plot_path, '{0:05d}'.format(idx) + ".png")
         txt_file = os.path.join(plot_path, '{0:05d}'.format(idx) + ".txt")
-        plot_roc(ROC_dict=ROCs, fig_name=plot_file, opt_label='error')
-        write_auc(AUC_dict=AUCs,txt_name=txt_file)
+        plot_roc(ROC_dict=rocs, fig_name=plot_file, opt_label=opt_label)
+        write_auc(AUC_dict=aucs,txt_name=txt_file)
+
+    for val in ROCs.keys():
+        ROCs[val] = np.array(ROCs[val]).mean(0)
+        AUCs[val] = np.array(AUCs[val]).mean(0)
+    summary_plot = os.path.join(plot_path, f'{name}' +  ".png")
+    summary_txt = os.path.join(plot_path, f'{name}' +  ".txt")
+    plot_roc(ROC_dict=ROCs, fig_name=summary_plot, opt_label=opt_label)
+    write_auc(AUC_dict=AUCs, txt_name=summary_txt)
+
+
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool, splat_args: ExtendedSettings, render_depth: bool):
     with torch.no_grad():
@@ -142,10 +162,10 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, splat_args, render_depth)
+            render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, splat_args, render_depth)
 
         if not skip_test:
-             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, splat_args, render_depth)
+            render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, splat_args, render_depth)
         
         # write number of gaussians too
         num_gaussians = scene.gaussians.get_xyz.shape[0]

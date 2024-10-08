@@ -10,7 +10,7 @@ def compute_roc(opt,est,intervals = 10): # input torch.tensor
     ROC_points = [opt[s].mean().item() if s.any() else 0.0 for s in subs]
     ROC.extend(ROC_points)
     ROC_tensor = torch.tensor(ROC)
-    AUC = torch.trapz(ROC_tensor, dx=1.0 / intervals).item()
+    AUC = torch.trapz(ROC_tensor, dx=100.0 / intervals).item()
     return ROC,AUC
 
 def plot_roc(ROC_dict,fig_name, opt_label='rgb_err',intervals = 10):
